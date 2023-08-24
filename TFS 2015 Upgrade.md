@@ -107,7 +107,7 @@ Installing TFS (Team Foundation Server) 2018 involves multiple steps, including 
 
 Refer to the official Microsoft documentation for the most detailed and updated instructions when installing TFS. The above guide provides a general overview, but specifics can change based on updates, patches, or specific business needs.
 
-#Azure Devops 2020 Server Installtion
+# Azure Devops 2020 Server Installtion
 
 1. **Prerequisites**:
 
