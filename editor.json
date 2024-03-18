@@ -1,1 +1,174 @@
 
+// Private Endpoint configuration
+param subscriptionId string
+param vnetResourceGroup string
+param virtualNetworkName string
+param subnetPvtEdp string
+param subnetVnetInt string
+param resourceType string
+// Logic App Paramaters
+param logicAppName string
+param hostingPlanName string
+param serverFarmResourceGroup string
+param location string 
+// @secure()
+// param keyVaultName string
+@secure()
+param saConnectionString string
+param userManagedIdentityId string
+param userManagedIdentityId2 string
+param use32BitWorkerProcess bool
+param ftpsState string
+param netFrameworkVersion string
+param sku string
+param skuCode string
+//App Insights
+param appInsightsName string
+// Tags
+param resourceTags object
+
+
+//App Service Plan
+resource hostingPlanResource 'Microsoft.Web/serverfarms@2022-09-01' = {
+  name: hostingPlanName
+  location: location
+  kind: ''
+  tags: resourceTags
+  properties: {
+    maximumElasticWorkerCount: 20
+    zoneRedundant: false
+  }
+  sku: {
+    tier: sku
+    name: skuCode
+  }
+  dependsOn: []
+}
+
+
+// Standard Workflow Logic App (For Pvt EndPoint / VNET Integration Support)
+resource logicAppResource 'Microsoft.Web/sites@2022-09-01' = {
+  name: logicAppName
+  kind: 'functionapp,workflowapp'
+  location: location
+  tags: resourceTags
+  properties: {
+    siteConfig: {
+      appSettings: [
+        {
+          name: 'FUNCTIONS_EXTENSION_VERSION'
+          value: '~4'
+        }
+        {
+          name: 'FUNCTIONS_WORKER_RUNTIME'
+          value: 'node'
+        }
+        {
+          name: 'WEBSITE_NODE_DEFAULT_VERSION'
+          value: '~16'
+        }
+        {
+          name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
+          value: reference('microsoft.insights/components/${appInsightsName}', '2015-05-01').InstrumentationKey
+        }
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: reference('microsoft.insights/components/${appInsightsName}', '2015-05-01').ConnectionString
+        }
+        // {
+        //   name: 'AzureWebJobsStorage'
+        //   value: '@Microsoft.KeyVault(SecretUri=${reference(resourceId('Microsoft.KeyVault/vaults/secrets', '${keyVaultName}', 'BlobConnectionString'),'2023-02-01').secretUri})'
+        // }
+        // {
+        //   name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
+        //   value: '@Microsoft.KeyVault(SecretUri=${reference(resourceId('Microsoft.KeyVault/vaults/secrets', '${keyVaultName}', 'BlobConnectionString'),'2023-02-01').secretUri})'
+        // }
+        {
+          name: 'WEBSITE_VNET_ROUTE_ALL'
+          value: '1'
+        }
+        {
+          name: 'AzureWebJobsStorage'
+          value: saConnectionString
+        }
+        {
+          name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
+          value: saConnectionString
+        }
+        {
+          name: 'WEBSITE_CONTENTSHARE'
+          value: logicAppName
+        }
+        {
+          name: 'AzureFunctionsJobHost__extensionBundle__id'
+          value: 'Microsoft.Azure.Functions.ExtensionBundle.Workflows'
+        }
+        {
+          name: 'AzureFunctionsJobHost__extensionBundle__version'
+          value: '[1.*, 2.0.0)'
+        }
+        {
+          name: 'APP_KIND'
+          value: 'workflowApp'
+        }
+      ]
+      cors: {
+      }
+      use32BitWorkerProcess: use32BitWorkerProcess
+      ftpsState: ftpsState
+      netFrameworkVersion: netFrameworkVersion
+    }
+    clientAffinityEnabled: false
+    httpsOnly: true
+    serverFarmId: '/subscriptions/${subscriptionId}/resourcegroups/${serverFarmResourceGroup}/providers/Microsoft.Web/serverfarms/${hostingPlanName}'
+  }
+  identity: {
+    type: 'UserAssigned'
+	  userAssignedIdentities: (!empty(userManagedIdentityId2) ?  {
+      '${userManagedIdentityId}': {} 
+      '${userManagedIdentityId2}': {}
+    } : {
+      '${userManagedIdentityId}': {} 
+    } )
+  }
+  dependsOn: [
+    hostingPlanResource
+  ]
+}
+output logicAppName string = logicAppResource.name
+output hostingPlanName string = hostingPlanResource.name
+
+//Create Private Endpoint
+module privateEndpointLogicApp './privateEndpoint.bicep' = {
+  name: 'privateEndpoint(${logicAppName})'
+  scope: resourceGroup(subscriptionId,vnetResourceGroup)
+  #disable-next-line explicit-values-for-loc-params
+  params:{
+    vnetResourceGroup: vnetResourceGroup
+    virtualNetworkName: virtualNetworkName
+    subnetName: subnetPvtEdp
+    privateEndpointName: logicAppName
+    resourceType: resourceType
+    privateLinkServiceId: logicAppResource.id
+  }
+}
+output pvtEndPntIpAddress string = privateEndpointLogicApp.outputs.ipAddress
+
+// vnet Integration
+module logicAppvnetIntegrationLogicApp './vnetIntegration.bicep' = {
+  name: 'vnetIntegration(${logicAppName})'
+  scope: resourceGroup(subscriptionId,vnetResourceGroup)
+  params: {
+    vnetResourceGroup: vnetResourceGroup
+    virtualNetworkName: virtualNetworkName
+    subnetName: subnetVnetInt
+  }
+}
+resource webappVnet 'Microsoft.Web/sites/networkConfig@2020-06-01' = {
+  parent: logicAppResource
+  name: 'virtualNetwork'
+  properties: {
+    subnetResourceId: logicAppvnetIntegrationLogicApp.outputs.vnetIntegration
+    swiftSupported: true
+  }
+}
